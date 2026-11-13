@@ -1,0 +1,245 @@
+package io.github.yuubiz.yuubin.install
+
+import android.content.Intent
+import io.github.yuubiz.yuubin.core.ApkDownloader
+import io.github.yuubiz.yuubin.core.AppStatus
+import io.github.yuubiz.yuubin.core.CatalogApp
+import io.github.yuubiz.yuubin.core.Download
+import io.github.yuubiz.yuubin.core.GitHubReleases
+import io.github.yuubiz.yuubin.core.InstallFailure
+import io.github.yuubiz.yuubin.core.InstallProgress
+import io.github.yuubiz.yuubin.core.Installed
+import io.github.yuubiz.yuubin.core.Release
+import io.github.yuubiz.yuubin.core.ReleaseLookup
+import io.github.yuubiz.yuubin.core.appStatus
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.getAndUpdate
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+
+/** One catalog app as the list shows it. [status] is null until both the release and the installed state are known. */
+data class AppRow(val app: CatalogApp, val status: AppStatus?, val progress: InstallProgress)
+
+/** A system install dialog waiting to be shown. The foreground activity starts [intent], then calls `confirmationShown`. */
+data class Confirmation(val packageName: String, val sessionId: Int, val intent: Intent)
+
+/** The single owner of catalog state and of every [InstallProgress] transition. */
+class Distributor(
+    private val catalog: List<CatalogApp>,
+    private val releases: GitHubReleases,
+    private val downloader: ApkDownloader,
+    private val packages: Packages,
+    private val sessions: SessionInstaller,
+    private val apkDir: File,
+    private val scope: CoroutineScope,
+) {
+    private data class Session(
+        val id: Int,
+        val versionCodeBefore: Long?,
+        val confirmation: Intent? = null,
+        val shown: Boolean = false,
+    )
+
+    private data class Slot(
+        val installed: Installed? = null,
+        val lookup: ReleaseLookup? = null,
+        val progress: InstallProgress = InstallProgress.Idle,
+        /** The committed session whose status broadcast this slot still accepts. */
+        val session: Session? = null,
+    )
+
+    private val slots = MutableStateFlow(catalog.associate { it.packageName to Slot() })
+
+    val rows: StateFlow<List<AppRow>> =
+        slots.map(::toRows).stateIn(scope, SharingStarted.Eagerly, toRows(slots.value))
+
+    val pendingConfirmation: StateFlow<Confirmation?> =
+        slots.map(::firstUnshown).stateIn(scope, SharingStarted.Eagerly, null)
+
+    // Nothing from an earlier process can still be tracked, so its sessions and files are stale.
+    private val startup = scope.launch(Dispatchers.IO) {
+        sessions.abandonAll()
+        apkDir.deleteRecursively()
+    }
+
+    /** Looks up every release concurrently and re-reads the installed state. */
+    suspend fun refresh() = coroutineScope {
+        catalog.forEach { app ->
+            launch {
+                val installed = withContext(Dispatchers.IO) { packages.installed(app) }
+                val lookup = releases.latest(app)
+                modify(app) { copy(installed = installed, lookup = lookup) }
+            }
+        }
+    }
+
+    /** Starts download, verification and the install session. Ignored while [app] already has one in flight. */
+    fun install(app: CatalogApp) {
+        val release = (slots.value.getValue(app.packageName).lookup as? ReleaseLookup.Found)?.release ?: return
+        val permitted = packages.canRequestInstalls()
+        val next = if (permitted) {
+            InstallProgress.Downloading(0, release.apk.sizeBytes)
+        } else {
+            InstallProgress.Failed(InstallFailure.INSTALL_PERMISSION_MISSING)
+        }
+        val before = modify(app) { if (progress.inFlight) this else copy(progress = next, session = null) }
+        if (before.progress.inFlight || !permitted) return
+        scope.launch(Dispatchers.IO) { runInstall(app, release, before.session) }
+    }
+
+    /** Returns a finished row (succeeded or failed) to idle. */
+    fun dismiss(app: CatalogApp) {
+        modify(app) {
+            if (progress is InstallProgress.Failed || progress is InstallProgress.Succeeded) copy(progress = InstallProgress.Idle) else this
+        }
+    }
+
+    fun confirmationShown(confirmation: Confirmation) {
+        modify(confirmation.packageName) {
+            if (session?.id == confirmation.sessionId) copy(session = session.copy(shown = true)) else this
+        }
+    }
+
+    /**
+     * Call on activity start or resume. Re-reads the installed state and settles installs whose outcome was lost:
+     * a session that is gone ends as Succeeded or Idle according to PackageManager, and a confirmation that was shown
+     * before this call but is back in our activity without a result goes Idle.
+     */
+    fun reconcile() {
+        // Taken now: a dialog the activity launches after this call must not count as already left.
+        val shownBefore = slots.value.mapNotNull { (pkg, slot) ->
+            slot.session?.takeIf { it.shown }?.let { pkg to it.id }
+        }.toMap()
+        scope.launch(Dispatchers.IO) {
+            startup.join()
+            catalog.forEach { app ->
+                val installed = packages.installed(app)
+                val session = slots.value.getValue(app.packageName).session
+                val alive = session != null && sessions.exists(session.id)
+                modify(app) { reconciled(installed, session?.id, alive, shownBefore[app.packageName]) }
+            }
+        }
+    }
+
+    /** Called by [InstallStatusReceiver]; the process may be new, in which case the session is unknown and ignored. */
+    fun onSessionStatus(sessionId: Int, status: SessionStatus) {
+        val app = catalog.firstOrNull { slots.value.getValue(it.packageName).session?.id == sessionId } ?: return
+        modify(app) {
+            if (session?.id != sessionId) return@modify this
+            when (status) {
+                is SessionStatus.NeedsConfirmation -> copy(
+                    progress = InstallProgress.AwaitingConfirmation,
+                    session = session.copy(confirmation = status.intent, shown = false),
+                )
+                SessionStatus.Succeeded -> copy(progress = InstallProgress.Succeeded, session = null)
+                // A row already returned to idle (its dialog was left) stays idle when the session is finally cancelled.
+                is SessionStatus.Failed -> copy(progress = if (progress == InstallProgress.Idle) progress else status.failure, session = null)
+            }
+        }
+        if (status == SessionStatus.Succeeded) {
+            scope.launch(Dispatchers.IO) {
+                val installed = packages.installed(app)
+                modify(app) { copy(installed = installed) }
+            }
+        }
+    }
+
+    private suspend fun runInstall(app: CatalogApp, release: Release, staleSession: Session?) {
+        startup.join()
+        staleSession?.let { sessions.abandon(it.id) }
+        val file = File(apkDir, "${app.packageName}.apk")
+        var staged: Int? = null
+        try {
+            val installed = packages.installed(app)
+            modify(app) { copy(installed = installed) }
+            if (installed is Installed.Yes && !installed.signerMatches) return fail(app, InstallFailure.SIGNER_MISMATCH)
+
+            val total = release.apk.sizeBytes
+            val download = downloader.download(release.apk, file) { bytes ->
+                modify(app) { copy(progress = InstallProgress.Downloading(bytes, total)) }
+            }
+            if (download is Download.Failed) return fail(app, download.reason, download.detail)
+
+            modify(app) { copy(progress = InstallProgress.Verifying) }
+            val versionCodeBefore = (installed as? Installed.Yes)?.versionCode
+            packages.verify(file, app.packageName, app.signer, versionCodeBefore)?.let { return fail(app, it) }
+
+            val id = sessions.stage(file, app.packageName)
+            staged = id
+            file.delete()
+            // Recorded before commit: the status broadcast can arrive before commit() returns.
+            modify(app) { copy(progress = InstallProgress.Installing, session = Session(id, versionCodeBefore)) }
+            sessions.commit(id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            staged?.let { id ->
+                sessions.abandon(id)
+                modify(app) { if (session?.id == id) copy(session = null) else this }
+            }
+            fail(app, InstallFailure.OTHER, e.message)
+        } finally {
+            file.delete()
+        }
+    }
+
+    private fun fail(app: CatalogApp, reason: InstallFailure, detail: String? = null) {
+        modify(app) { copy(progress = InstallProgress.Failed(reason, detail)) }
+    }
+
+    private fun Slot.reconciled(installed: Installed, checkedSession: Int?, alive: Boolean, shownSession: Int?): Slot {
+        val current = copy(installed = installed)
+        val session = current.session ?: return current
+        if (session.id != checkedSession) return current
+        if (!alive) return current.copy(progress = settled(installed, session.versionCodeBefore), session = null)
+        if (current.progress == InstallProgress.AwaitingConfirmation && shownSession == session.id) {
+            // The session is kept rather than abandoned: an install the user already approved may still be running
+            // (from recents, say), and abandoning can abort it. Its late status still lands on this row.
+            return current.copy(progress = InstallProgress.Idle)
+        }
+        return current
+    }
+
+    private fun settled(installed: Installed, versionCodeBefore: Long?): InstallProgress =
+        if (installed is Installed.Yes && (versionCodeBefore == null || installed.versionCode > versionCodeBefore)) {
+            InstallProgress.Succeeded
+        } else {
+            InstallProgress.Idle
+        }
+
+    private fun toRows(slots: Map<String, Slot>): List<AppRow> = catalog.map { app ->
+        val slot = slots.getValue(app.packageName)
+        val status = if (slot.installed != null && slot.lookup != null) appStatus(slot.installed, slot.lookup) else null
+        AppRow(app, status, slot.progress)
+    }
+
+    private fun firstUnshown(slots: Map<String, Slot>): Confirmation? = catalog.firstNotNullOfOrNull { app ->
+        val slot = slots.getValue(app.packageName)
+        val session = slot.session
+        val intent = session?.confirmation
+        if (slot.progress == InstallProgress.AwaitingConfirmation && intent != null && !session.shown) {
+            Confirmation(app.packageName, session.id, intent)
+        } else {
+            null
+        }
+    }
+
+    /** Applies [change] atomically and returns the slot as it was before. [change] may run more than once. */
+    private fun modify(app: CatalogApp, change: Slot.() -> Slot): Slot = modify(app.packageName, change)
+
+    private fun modify(packageName: String, change: Slot.() -> Slot): Slot =
+        slots.getAndUpdate { it + (packageName to it.getValue(packageName).change()) }.getValue(packageName)
+
+    private val InstallProgress.inFlight: Boolean
+        get() = this is InstallProgress.Downloading || this == InstallProgress.Verifying ||
+            this == InstallProgress.AwaitingConfirmation || this == InstallProgress.Installing
+}
