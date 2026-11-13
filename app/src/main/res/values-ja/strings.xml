@@ -1,5 +1,51 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Yuubin</string>
-    <string name="placeholder_tagline">自作アプリの更新</string>
+
+    <string name="action_refresh">再読み込み</string>
+    <string name="action_install">インストール</string>
+    <string name="action_update">更新</string>
+    <string name="action_open">開く</string>
+    <string name="action_app_info">アプリ情報</string>
+    <string name="action_allow">許可</string>
+    <string name="action_dismiss">閉じる</string>
+
+    <string name="loading">読み込み中</string>
+    <string name="whats_new">更新内容</string>
+    <string name="state_expanded">展開中</string>
+    <string name="state_collapsed">折りたたみ中</string>
+
+    <string name="version_not_installed">未インストール</string>
+    <string name="version_not_installed_latest">未インストール · 最新 %1$s</string>
+    <string name="version_installed">バージョン %1$s</string>
+    <string name="version_update">%1$s → %2$s</string>
+
+    <string name="status_up_to_date">最新です</string>
+    <string name="status_signer_mismatch">インストール済みのアプリは別の鍵で署名されているため、Yuubin からインストールするには先にアンインストールが必要です。アプリ情報から削除してください。</string>
+
+    <string name="lookup_not_found">公開済みのリリースはまだありません</string>
+    <string name="lookup_rate_limited">GitHub のリクエスト上限に達しました。しばらくしてからやり直してください。</string>
+    <string name="lookup_network">GitHub に接続できません。通信状況を確認してください。</string>
+    <string name="lookup_unusable">リリース情報を利用できません (%1$s)。</string>
+
+    <string name="progress_downloading">ダウンロード中… %1$d%%</string>
+    <string name="progress_downloading_unknown">ダウンロード中…</string>
+    <string name="progress_verifying">検証中…</string>
+    <string name="progress_awaiting_confirmation">確認を待っています…</string>
+    <string name="progress_installing">インストール中…</string>
+    <string name="progress_succeeded">インストールしました</string>
+
+    <string name="failure_download">ダウンロードに失敗しました。通信状況を確認して、もう一度お試しください。</string>
+    <string name="failure_hash_mismatch">ダウンロードしたファイルが公開されているチェックサムと一致しないため、破棄しました。</string>
+    <string name="failure_unreadable_apk">ダウンロードしたファイルを APK として読み取れません。</string>
+    <string name="failure_package_mismatch">ダウンロードした APK が想定と別のアプリのものだったため、インストールしませんでした。</string>
+    <string name="failure_signer_mismatch">署名の鍵が Yuubin が信頼しているものと一致しないため、インストールしませんでした。</string>
+    <string name="failure_not_newer">リリースがインストール済みのバージョンより新しくないため、インストールしませんでした。</string>
+    <string name="failure_install_permission_missing">Yuubin にアプリのインストールが許可されていません。許可してから、もう一度インストールをタップしてください。</string>
+    <string name="failure_cancelled">インストールがキャンセルされました。</string>
+    <string name="failure_conflict">インストール済みの別のアプリと競合しています。</string>
+    <string name="failure_incompatible">このリリースはこの端末に対応していません。</string>
+    <string name="failure_storage">ストレージの空き容量が足りません。</string>
+    <string name="failure_blocked">システムまたは端末のポリシーによりインストールがブロックされました。</string>
+    <string name="failure_other">原因不明のエラーでインストールに失敗しました。</string>
 </resources>

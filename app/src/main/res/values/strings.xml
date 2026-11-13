@@ -1,5 +1,51 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Yuubin</string>
-    <string name="placeholder_tagline">Updates for my own apps</string>
+
+    <string name="action_refresh">Refresh</string>
+    <string name="action_install">Install</string>
+    <string name="action_update">Update</string>
+    <string name="action_open">Open</string>
+    <string name="action_app_info">App info</string>
+    <string name="action_allow">Allow</string>
+    <string name="action_dismiss">Dismiss</string>
+
+    <string name="loading">Loading</string>
+    <string name="whats_new">What\'s new</string>
+    <string name="state_expanded">Expanded</string>
+    <string name="state_collapsed">Collapsed</string>
+
+    <string name="version_not_installed">Not installed</string>
+    <string name="version_not_installed_latest">Not installed · latest %1$s</string>
+    <string name="version_installed">Version %1$s</string>
+    <string name="version_update">%1$s → %2$s</string>
+
+    <string name="status_up_to_date">Up to date</string>
+    <string name="status_signer_mismatch">The installed copy was signed with a different key and must be uninstalled before Yuubin can install it. Open the app info to uninstall it.</string>
+
+    <string name="lookup_not_found">No published release yet</string>
+    <string name="lookup_rate_limited">GitHub\'s rate limit was reached. Try again later.</string>
+    <string name="lookup_network">Could not reach GitHub. Check the connection.</string>
+    <string name="lookup_unusable">The release data is not usable (%1$s).</string>
+
+    <string name="progress_downloading">Downloading… %1$d%%</string>
+    <string name="progress_downloading_unknown">Downloading…</string>
+    <string name="progress_verifying">Verifying…</string>
+    <string name="progress_awaiting_confirmation">Waiting for your confirmation…</string>
+    <string name="progress_installing">Installing…</string>
+    <string name="progress_succeeded">Installed</string>
+
+    <string name="failure_download">The download failed. Check the connection and try again.</string>
+    <string name="failure_hash_mismatch">The downloaded file does not match the published checksum, so it was discarded.</string>
+    <string name="failure_unreadable_apk">The downloaded file is not a readable APK.</string>
+    <string name="failure_package_mismatch">The downloaded APK belongs to a different app than expected, so it was not installed.</string>
+    <string name="failure_signer_mismatch">The signing key does not match the one Yuubin trusts for this app, so nothing was installed.</string>
+    <string name="failure_not_newer">The release is not newer than the installed version, so nothing was installed.</string>
+    <string name="failure_install_permission_missing">Yuubin is not allowed to install apps. Allow it, then tap Install again.</string>
+    <string name="failure_cancelled">The installation was cancelled.</string>
+    <string name="failure_conflict">The installation conflicts with another installed app.</string>
+    <string name="failure_incompatible">This release is not compatible with this device.</string>
+    <string name="failure_storage">There is not enough storage space to install this app.</string>
+    <string name="failure_blocked">The installation was blocked by the system or a device policy.</string>
+    <string name="failure_other">The installation failed for an unknown reason.</string>
 </resources>
