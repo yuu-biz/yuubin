@@ -16,6 +16,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -110,9 +111,10 @@ class Distributor(
     }
 
     /**
-     * Call on activity start or resume. Re-reads the installed state and settles installs whose outcome was lost:
-     * a session that is gone ends as Succeeded or Idle according to PackageManager, and a confirmation that was shown
-     * before this call but is back in our activity without a result goes Idle.
+     * Call from the activity's `onResume`. Re-reads the installed state and settles installs whose result was lost:
+     * a session that is gone ends as Succeeded or Idle according to PackageManager. A confirmation shown before this
+     * call means the dialog was left; its row shows Installing for at most [CONFIRMED_INSTALL_TIMEOUT_MS], then Idle.
+     * No session is abandoned here, so a late result still lands on its row.
      */
     fun reconcile() {
         // Taken now: a dialog the activity launches after this call must not count as already left.
@@ -122,10 +124,39 @@ class Distributor(
         scope.launch(Dispatchers.IO) {
             startup.join()
             catalog.forEach { app ->
-                val installed = packages.installed(app)
-                val session = slots.value.getValue(app.packageName).session
-                val alive = session != null && sessions.exists(session.id)
-                modify(app) { reconciled(installed, session?.id, alive, shownBefore[app.packageName]) }
+                val left = shownBefore[app.packageName]
+                val before = settle(app, dialogLeft = left)
+                if (left != null && before.progress == InstallProgress.AwaitingConfirmation) {
+                    scope.launch(Dispatchers.IO) {
+                        delay(CONFIRMED_INSTALL_TIMEOUT_MS)
+                        settle(app, timedOut = left)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Re-reads [app]'s installed state and session. [dialogLeft] and [timedOut] name the session they apply to.
+     * Returns the slot as it was before.
+     */
+    private fun settle(app: CatalogApp, dialogLeft: Int? = null, timedOut: Int? = null): Slot {
+        val installed = packages.installed(app)
+        val checked = slots.value.getValue(app.packageName).session?.id
+        val alive = checked != null && sessions.exists(checked)
+        return modify(app) {
+            val current = copy(installed = installed)
+            val session = current.session
+            when {
+                session == null || session.id != checked -> current
+                !alive -> current.copy(progress = settled(installed, session.versionCodeBefore), session = null)
+                // PackageInstaller's dialog closes as soon as the user approves, while the session is still installing.
+                // Left through Home instead, the dialog stays in recents; either way the result may still come.
+                current.progress == InstallProgress.AwaitingConfirmation && dialogLeft == session.id ->
+                    current.copy(progress = InstallProgress.Installing)
+                current.progress == InstallProgress.Installing && timedOut == session.id ->
+                    current.copy(progress = InstallProgress.Idle)
+                else -> current
             }
         }
     }
@@ -141,7 +172,7 @@ class Distributor(
                     session = session.copy(confirmation = status.intent, shown = false),
                 )
                 SessionStatus.Succeeded -> copy(progress = InstallProgress.Succeeded, session = null)
-                // A row already returned to idle (its dialog was left) stays idle when the session is finally cancelled.
+                // A row whose wait timed out is already idle; a later cancel of its session does not turn it into an error.
                 is SessionStatus.Failed -> copy(progress = if (progress == InstallProgress.Idle) progress else status.failure, session = null)
             }
         }
@@ -196,19 +227,6 @@ class Distributor(
         modify(app) { copy(progress = InstallProgress.Failed(reason, detail)) }
     }
 
-    private fun Slot.reconciled(installed: Installed, checkedSession: Int?, alive: Boolean, shownSession: Int?): Slot {
-        val current = copy(installed = installed)
-        val session = current.session ?: return current
-        if (session.id != checkedSession) return current
-        if (!alive) return current.copy(progress = settled(installed, session.versionCodeBefore), session = null)
-        if (current.progress == InstallProgress.AwaitingConfirmation && shownSession == session.id) {
-            // The session is kept rather than abandoned: an install the user already approved may still be running
-            // (from recents, say), and abandoning can abort it. Its late status still lands on this row.
-            return current.copy(progress = InstallProgress.Idle)
-        }
-        return current
-    }
-
     private fun settled(installed: Installed, versionCodeBefore: Long?): InstallProgress =
         if (installed is Installed.Yes && (versionCodeBefore == null || installed.versionCode > versionCodeBefore)) {
             InstallProgress.Succeeded
@@ -242,4 +260,9 @@ class Distributor(
     private val InstallProgress.inFlight: Boolean
         get() = this is InstallProgress.Downloading || this == InstallProgress.Verifying ||
             this == InstallProgress.AwaitingConfirmation || this == InstallProgress.Installing
+
+    private companion object {
+        /** How long an approved-looking install may show Installing without a result before the row goes Idle. */
+        const val CONFIRMED_INSTALL_TIMEOUT_MS = 120_000L
+    }
 }

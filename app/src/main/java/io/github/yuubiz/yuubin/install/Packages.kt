@@ -41,8 +41,9 @@ class Packages(private val pm: PackageManager) {
         checkApk(archive(apk), expectedPackage, pin, installedVersionCode)
 
     private fun archive(apk: File): ApkFacts? {
-        // API 28 and 29 collect an archive's certificates only when GET_SIGNATURES is set; with GET_SIGNING_CERTIFICATES
-        // alone signingInfo stays null there (AOSP PackageManager.getPackageArchiveInfo). Only signingInfo is read.
+        // Keep GET_SIGNATURES on every API level: in AOSP getPackageArchiveInfo (seen in the 9, 10 and 13 sources)
+        // certificates are collected only when it is set, so GET_SIGNING_CERTIFICATES alone leaves signingInfo null.
+        // Only signingInfo is read.
         @Suppress("DEPRECATION")
         val flags = PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES
         val info: PackageInfo = if (Build.VERSION.SDK_INT >= 33) {
