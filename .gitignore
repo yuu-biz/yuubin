@@ -1,0 +1,23 @@
+# Signing
+keystore.properties
+*.jks
+*.keystore
+
+# Gradle / Android
+.gradle/
+.kotlin/
+build/
+local.properties
+captures/
+.cxx/
+*.apk
+*.aab
+
+# IDE
+.idea/
+*.iml
+
+# Local agent state
+.claude/settings.local.json
+CLAUDE.local.md
+.local/
