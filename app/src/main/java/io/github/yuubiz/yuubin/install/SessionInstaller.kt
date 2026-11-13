@@ -14,8 +14,13 @@ interface InstallSessions {
     fun commit(sessionId: Int)
     fun exists(sessionId: Int): Boolean
     fun abandon(sessionId: Int)
-    fun abandonAll()
+
+    /** Every session this app owns, including ones an earlier process created. */
+    fun mine(): List<OwnSession>
 }
+
+/** [committed] is null below API 29, where PackageInstaller does not report it. */
+data class OwnSession(val id: Int, val packageName: String?, val committed: Boolean?)
 
 class SessionInstaller(private val context: Context) : InstallSessions {
     private val installer: PackageInstaller get() = context.packageManager.packageInstaller
@@ -55,7 +60,9 @@ class SessionInstaller(private val context: Context) : InstallSessions {
         }
     }
 
-    override fun abandonAll() =installer.mySessions.forEach { abandon(it.sessionId) }
+    override fun mine(): List<OwnSession> = installer.mySessions.map {
+        OwnSession(it.sessionId, it.appPackageName, if (Build.VERSION.SDK_INT >= 29) it.isCommitted else null)
+    }
 
     private fun statusReceiver(sessionId: Int): PendingIntent {
         // The installer writes the status extras into the intent, so it must be mutable; being explicit to our own

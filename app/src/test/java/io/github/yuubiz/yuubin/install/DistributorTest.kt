@@ -82,7 +82,35 @@ class DistributorTest {
         distributor.install(app)
         advanceUntilIdle()
         assertEquals(InstallProgress.Installing, distributor.row(app).progress)
-        return sessions.live.filterValues { it.packageName == app.packageName && it.committed == true }.keys.single()
+        val id = sessions.staged.last()
+        assertEquals(FakeSessions.Live(app.packageName, committed = true), sessions.live[id])
+        return id
+    }
+
+    @Test
+    fun `startup abandons only sessions known to be uncommitted`() = runTest {
+        sessions.live[1] = FakeSessions.Live(appA.packageName, committed = false)
+        sessions.live[2] = FakeSessions.Live(appB.packageName, committed = true)
+        sessions.live[3] = FakeSessions.Live(appA.packageName, committed = null)
+
+        distributor()
+        advanceUntilIdle()
+
+        assertEquals(listOf(1), sessions.abandoned)
+        assertEquals(setOf(2, 3), sessions.live.keys)
+    }
+
+    @Test
+    fun `an install abandons the earlier session of that package only`() = runTest {
+        packages.installed[appA.packageName] = v1
+        val earlier = committedInstall(distributor(), appA)
+        scopes.single().cancel()
+        sessions.live[50] = FakeSessions.Live(appB.packageName, committed = true)
+
+        val retried = committedInstall(distributor(), appA)
+
+        assertEquals(listOf(earlier), sessions.abandoned)
+        assertEquals(setOf(retried, 50), sessions.live.keys)
     }
 
     @Test
@@ -184,5 +212,5 @@ private class FakeSessions : InstallSessions {
         if (live.remove(sessionId) != null) abandoned += sessionId
     }
 
-    override fun abandonAll() = live.keys.toList().forEach(::abandon)
+    override fun mine() = live.map { (id, session) -> OwnSession(id, session.packageName, session.committed) }
 }

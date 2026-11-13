@@ -72,9 +72,11 @@ class Distributor(
     val pendingConfirmation: StateFlow<Confirmation?> =
         slots.map(::firstUnshown).stateIn(scope, SharingStarted.Eagerly, null)
 
-    // Nothing from an earlier process can still be tracked, so its sessions and files are stale.
+    // A committed session from an earlier process may still be waiting for the user or installing, so it is kept; its
+    // result is not tracked, but reconcile and refresh read the installed version. Yuubin commits right after staging,
+    // so an uncommitted one is a leftover. Below API 29 the two cannot be told apart and runInstall cleans up instead.
     private val startup = scope.launch(io) {
-        sessions.abandonAll()
+        sessions.mine().filter { it.committed == false }.forEach { sessions.abandon(it.id) }
         apkDir.deleteRecursively()
     }
 
@@ -100,7 +102,7 @@ class Distributor(
         }
         val before = modify(app) { if (progress.inFlight) this else copy(progress = next, session = null) }
         if (before.progress.inFlight || !permitted) return
-        scope.launch(io) { runInstall(app, release, before.session) }
+        scope.launch(io) { runInstall(app, release) }
     }
 
     /** Returns a finished row (succeeded or failed) to idle. */
@@ -185,12 +187,13 @@ class Distributor(
         }
     }
 
-    private suspend fun runInstall(app: CatalogApp, release: Release, staleSession: Session?) {
+    private suspend fun runInstall(app: CatalogApp, release: Release) {
         startup.join()
-        staleSession?.let { sessions.abandon(it.id) }
         val file = File(apkDir, "${app.packageName}.apk")
         var staged: Int? = null
         try {
+            // The package's earlier session, from this process or a dead one, would otherwise install alongside this one.
+            sessions.mine().filter { it.packageName == app.packageName }.forEach { sessions.abandon(it.id) }
             val installed = syncInstalled(app).installed
             if (installed is Installed.Yes && !installed.signerMatches) return fail(app, InstallFailure.SIGNER_MISMATCH)
 
