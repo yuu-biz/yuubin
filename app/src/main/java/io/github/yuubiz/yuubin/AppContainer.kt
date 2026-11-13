@@ -19,8 +19,8 @@ class AppContainer(context: Context) {
 
     val distributor = Distributor(
         catalog = Catalog.apps,
-        releases = GitHubReleases(http),
-        downloader = ApkDownloader(http),
+        latestRelease = GitHubReleases(http)::latest,
+        downloadApk = ApkDownloader(http)::download,
         packages = Packages(context.packageManager),
         sessions = SessionInstaller(context),
         apkDir = File(context.cacheDir, "apk"),

@@ -1,11 +1,10 @@
 package io.github.yuubiz.yuubin.install
 
 import android.content.Intent
-import io.github.yuubiz.yuubin.core.ApkDownloader
+import io.github.yuubiz.yuubin.core.ApkAsset
 import io.github.yuubiz.yuubin.core.AppStatus
 import io.github.yuubiz.yuubin.core.CatalogApp
 import io.github.yuubiz.yuubin.core.Download
-import io.github.yuubiz.yuubin.core.GitHubReleases
 import io.github.yuubiz.yuubin.core.InstallFailure
 import io.github.yuubiz.yuubin.core.InstallProgress
 import io.github.yuubiz.yuubin.core.Installed
@@ -13,6 +12,7 @@ import io.github.yuubiz.yuubin.core.Release
 import io.github.yuubiz.yuubin.core.ReleaseLookup
 import io.github.yuubiz.yuubin.core.appStatus
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
@@ -24,6 +24,8 @@ import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -36,12 +38,13 @@ data class Confirmation(val packageName: String, val sessionId: Int, val intent:
 /** The single owner of catalog state and of every [InstallProgress] transition. */
 class Distributor(
     private val catalog: List<CatalogApp>,
-    private val releases: GitHubReleases,
-    private val downloader: ApkDownloader,
-    private val packages: Packages,
-    private val sessions: SessionInstaller,
+    private val latestRelease: suspend (CatalogApp) -> ReleaseLookup,
+    private val downloadApk: suspend (asset: ApkAsset, target: File, onProgress: (bytes: Long) -> Unit) -> Download,
+    private val packages: AppPackages,
+    private val sessions: InstallSessions,
     private val apkDir: File,
     private val scope: CoroutineScope,
+    private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
     private data class Session(
         val id: Int,
@@ -58,7 +61,10 @@ class Distributor(
         val session: Session? = null,
     )
 
+    private data class Synced(val before: Slot, val installed: Installed)
+
     private val slots = MutableStateFlow(catalog.associate { it.packageName to Slot() })
+    private val installedLock = Mutex()
 
     val rows: StateFlow<List<AppRow>> =
         slots.map(::toRows).stateIn(scope, SharingStarted.Eagerly, toRows(slots.value))
@@ -67,7 +73,7 @@ class Distributor(
         slots.map(::firstUnshown).stateIn(scope, SharingStarted.Eagerly, null)
 
     // Nothing from an earlier process can still be tracked, so its sessions and files are stale.
-    private val startup = scope.launch(Dispatchers.IO) {
+    private val startup = scope.launch(io) {
         sessions.abandonAll()
         apkDir.deleteRecursively()
     }
@@ -75,10 +81,10 @@ class Distributor(
     /** Looks up every release concurrently and re-reads the installed state. */
     suspend fun refresh() = coroutineScope {
         catalog.forEach { app ->
+            launch { syncInstalled(app) }
             launch {
-                val installed = withContext(Dispatchers.IO) { packages.installed(app) }
-                val lookup = releases.latest(app)
-                modify(app) { copy(installed = installed, lookup = lookup) }
+                val lookup = latestRelease(app)
+                modify(app) { copy(lookup = lookup) }
             }
         }
     }
@@ -94,7 +100,7 @@ class Distributor(
         }
         val before = modify(app) { if (progress.inFlight) this else copy(progress = next, session = null) }
         if (before.progress.inFlight || !permitted) return
-        scope.launch(Dispatchers.IO) { runInstall(app, release, before.session) }
+        scope.launch(io) { runInstall(app, release, before.session) }
     }
 
     /** Returns a finished row (succeeded or failed) to idle. */
@@ -121,13 +127,13 @@ class Distributor(
         val shownBefore = slots.value.mapNotNull { (pkg, slot) ->
             slot.session?.takeIf { it.shown }?.let { pkg to it.id }
         }.toMap()
-        scope.launch(Dispatchers.IO) {
+        scope.launch(io) {
             startup.join()
             catalog.forEach { app ->
                 val left = shownBefore[app.packageName]
                 val before = settle(app, dialogLeft = left)
                 if (left != null && before.progress == InstallProgress.AwaitingConfirmation) {
-                    scope.launch(Dispatchers.IO) {
+                    scope.launch(io) {
                         delay(CONFIRMED_INSTALL_TIMEOUT_MS)
                         settle(app, timedOut = left)
                     }
@@ -140,25 +146,23 @@ class Distributor(
      * Re-reads [app]'s installed state and session. [dialogLeft] and [timedOut] name the session they apply to.
      * Returns the slot as it was before.
      */
-    private fun settle(app: CatalogApp, dialogLeft: Int? = null, timedOut: Int? = null): Slot {
-        val installed = packages.installed(app)
+    private suspend fun settle(app: CatalogApp, dialogLeft: Int? = null, timedOut: Int? = null): Slot {
         val checked = slots.value.getValue(app.packageName).session?.id
+        // Checked before the installed read, so a session that finishes in between is judged by the version it installed.
         val alive = checked != null && sessions.exists(checked)
-        return modify(app) {
-            val current = copy(installed = installed)
-            val session = current.session
+        return syncInstalled(app) { installed ->
             when {
-                session == null || session.id != checked -> current
-                !alive -> current.copy(progress = settled(installed, session.versionCodeBefore), session = null)
+                session == null || session.id != checked -> this
+                !alive -> copy(progress = settled(installed, session.versionCodeBefore), session = null)
                 // PackageInstaller's dialog closes as soon as the user approves, while the session is still installing.
                 // Left through Home instead, the dialog stays in recents; either way the result may still come.
-                current.progress == InstallProgress.AwaitingConfirmation && dialogLeft == session.id ->
-                    current.copy(progress = InstallProgress.Installing)
-                current.progress == InstallProgress.Installing && timedOut == session.id ->
-                    current.copy(progress = InstallProgress.Idle)
-                else -> current
+                progress == InstallProgress.AwaitingConfirmation && dialogLeft == session.id ->
+                    copy(progress = InstallProgress.Installing)
+                progress == InstallProgress.Installing && timedOut == session.id ->
+                    copy(progress = InstallProgress.Idle)
+                else -> this
             }
-        }
+        }.before
     }
 
     /** Called by [InstallStatusReceiver]; the process may be new, in which case the session is unknown and ignored. */
@@ -177,10 +181,7 @@ class Distributor(
             }
         }
         if (status == SessionStatus.Succeeded) {
-            scope.launch(Dispatchers.IO) {
-                val installed = packages.installed(app)
-                modify(app) { copy(installed = installed) }
-            }
+            scope.launch(io) { syncInstalled(app) }
         }
     }
 
@@ -190,12 +191,11 @@ class Distributor(
         val file = File(apkDir, "${app.packageName}.apk")
         var staged: Int? = null
         try {
-            val installed = packages.installed(app)
-            modify(app) { copy(installed = installed) }
+            val installed = syncInstalled(app).installed
             if (installed is Installed.Yes && !installed.signerMatches) return fail(app, InstallFailure.SIGNER_MISMATCH)
 
             val total = release.apk.sizeBytes
-            val download = downloader.download(release.apk, file) { bytes ->
+            val download = downloadApk(release.apk, file) { bytes ->
                 modify(app) { copy(progress = InstallProgress.Downloading(bytes, total)) }
             }
             if (download is Download.Failed) return fail(app, download.reason, download.detail)
@@ -250,6 +250,16 @@ class Distributor(
             null
         }
     }
+
+    /**
+     * The only writer of [Slot.installed]. Reads PackageManager and applies [decide] to the slot holding that value.
+     * Read and write happen under one lock, so a read taken before a slower one cannot be written after it.
+     */
+    private suspend fun syncInstalled(app: CatalogApp, decide: Slot.(Installed) -> Slot = { this }): Synced =
+        installedLock.withLock {
+            val installed = withContext(io) { packages.installed(app) }
+            Synced(before = modify(app) { copy(installed = installed).decide(installed) }, installed = installed)
+        }
 
     /** Applies [change] atomically and returns the slot as it was before. [change] may run more than once. */
     private fun modify(app: CatalogApp, change: Slot.() -> Slot): Slot = modify(app.packageName, change)

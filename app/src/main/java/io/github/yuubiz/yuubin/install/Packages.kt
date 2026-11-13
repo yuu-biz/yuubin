@@ -14,11 +14,20 @@ import io.github.yuubiz.yuubin.core.checkApk
 import java.io.File
 import java.security.MessageDigest
 
-/** PackageManager reads: installed catalog apps and downloaded APKs. Blocking; call off the main thread. */
-class Packages(private val pm: PackageManager) {
-    fun canRequestInstalls(): Boolean = pm.canRequestPackageInstalls()
+/** What [Distributor] reads from PackageManager. Blocking; call off the main thread. */
+interface AppPackages {
+    fun canRequestInstalls(): Boolean
+    fun installed(app: CatalogApp): Installed
 
-    fun installed(app: CatalogApp): Installed {
+    /** Null means the APK may be installed; see [checkApk] for the rules. */
+    fun verify(apk: File, expectedPackage: String, pin: Sha256, installedVersionCode: Long?): InstallFailure?
+}
+
+/** PackageManager reads: installed catalog apps and downloaded APKs. Blocking; call off the main thread. */
+class Packages(private val pm: PackageManager) : AppPackages {
+    override fun canRequestInstalls(): Boolean = pm.canRequestPackageInstalls()
+
+    override fun installed(app: CatalogApp): Installed {
         val info = try {
             if (Build.VERSION.SDK_INT >= 33) {
                 pm.getPackageInfo(app.packageName, PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong()))
@@ -36,8 +45,7 @@ class Packages(private val pm: PackageManager) {
         )
     }
 
-    /** Null means the APK may be installed; see [checkApk] for the rules. */
-    fun verify(apk: File, expectedPackage: String, pin: Sha256, installedVersionCode: Long?): InstallFailure? =
+    override fun verify(apk: File, expectedPackage: String, pin: Sha256, installedVersionCode: Long?): InstallFailure? =
         checkApk(archive(apk), expectedPackage, pin, installedVersionCode)
 
     private fun archive(apk: File): ApkFacts? {
