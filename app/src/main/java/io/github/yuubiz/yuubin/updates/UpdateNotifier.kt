@@ -38,6 +38,8 @@ class UpdateNotifier(private val context: Context) {
                 .setName(context.getString(R.string.update_channel_name))
                 .build(),
         )
+        // A channel the user switched off shows nothing, so it must not count as announced either.
+        if (manager.getNotificationChannelCompat(CHANNEL_ID)?.importance == NotificationManagerCompat.IMPORTANCE_NONE) return
         manager.notify(NOTIFICATION_ID, notification(notice))
         record.edit { notice.notified.forEach { (pkg, tag) -> putString(pkg, tag) } }
     }

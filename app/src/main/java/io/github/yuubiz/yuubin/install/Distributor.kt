@@ -68,6 +68,7 @@ class Distributor(
 
     private val slots = MutableStateFlow(catalog.associate { it.packageName to Slot() })
     private val installedLock = Mutex()
+    private val refreshLock = Mutex()
 
     val rows: StateFlow<List<AppRow>> =
         slots.map(::toRows).stateIn(scope, SharingStarted.Eagerly, toRows(slots.value))
@@ -87,7 +88,9 @@ class Distributor(
      * Looks up every release concurrently, re-reads the installed state and returns the rows as they then are.
      * [rows] is updated on [scope] and may not show the result yet when this returns.
      */
-    suspend fun refresh(): List<AppRow> {
+    suspend fun refresh(): List<AppRow> = refreshLock.withLock {
+        // One at a time: the background check and the list share this object, and a slow lookup that fails late
+        // must not replace the result of a refresh that started after it.
         coroutineScope {
             catalog.forEach { app ->
                 launch { syncInstalled(app) }
@@ -97,7 +100,7 @@ class Distributor(
                 }
             }
         }
-        return toRows(slots.value)
+        toRows(slots.value)
     }
 
     /** Starts download, verification and the install session. Ignored while [app] already has one in flight. */
