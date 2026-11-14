@@ -32,7 +32,10 @@ import java.io.File
 /** One catalog app as the list shows it. [status] is null until both the release and the installed state are known. */
 data class AppRow(val app: CatalogApp, val status: AppStatus?, val progress: InstallProgress)
 
-/** A system install dialog waiting to be shown. The foreground activity starts [intent], then calls `confirmationShown`. */
+/**
+ * A system install dialog waiting to be shown. The foreground activity starts [intent], then calls `confirmationShown`,
+ * or `confirmationFailed` when it could not be started.
+ */
 data class Confirmation(val packageName: String, val sessionId: Int, val intent: Intent)
 
 /** The single owner of catalog state and of every [InstallProgress] transition. */
@@ -116,6 +119,16 @@ class Distributor(
         modify(confirmation.packageName) {
             if (session?.id == confirmation.sessionId) copy(session = session.copy(shown = true)) else this
         }
+    }
+
+    /** The dialog could not be started, so nothing can finish the session: it is abandoned and the row fails. */
+    fun confirmationFailed(confirmation: Confirmation, detail: String?) {
+        val id = confirmation.sessionId
+        val before = modify(confirmation.packageName) {
+            if (session?.id == id) copy(progress = InstallProgress.Failed(InstallFailure.OTHER, detail), session = null) else this
+        }
+        // Detached from the slot first, so the abort broadcast that abandoning may send cannot overwrite the failure.
+        if (before.session?.id == id) scope.launch(io) { sessions.abandon(id) }
     }
 
     /**

@@ -1,10 +1,12 @@
 package io.github.yuubiz.yuubin.install
 
+import android.content.Intent
 import io.github.yuubiz.yuubin.core.ApkAsset
 import io.github.yuubiz.yuubin.core.AppStatus
 import io.github.yuubiz.yuubin.core.CatalogApp
 import io.github.yuubiz.yuubin.core.Download
 import io.github.yuubiz.yuubin.core.GitHubRepo
+import io.github.yuubiz.yuubin.core.InstallFailure
 import io.github.yuubiz.yuubin.core.InstallProgress
 import io.github.yuubiz.yuubin.core.Installed
 import io.github.yuubiz.yuubin.core.Release
@@ -24,6 +26,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -158,6 +161,49 @@ class DistributorTest {
         advanceUntilIdle()
 
         assertEquals(AppRow(appA, AppStatus.UpdateAvailable(v1, release), InstallProgress.Idle), distributor.row(appA))
+    }
+
+    /** Runs an install of [app] until its confirmation is pending and returns it. */
+    private suspend fun TestScope.pendingConfirmation(distributor: Distributor, app: CatalogApp): Confirmation {
+        val id = committedInstall(distributor, app)
+        distributor.onSessionStatus(id, SessionStatus.NeedsConfirmation(Intent()))
+        runCurrent()
+        assertEquals(InstallProgress.AwaitingConfirmation, distributor.row(app).progress)
+        return requireNotNull(distributor.pendingConfirmation.value)
+    }
+
+    @Test
+    fun `a confirmation that could not start abandons its session and leaves the row retryable`() = runTest {
+        packages.installed[appA.packageName] = v1
+        val distributor = distributor()
+        val confirmation = pendingConfirmation(distributor, appA)
+
+        distributor.confirmationFailed(confirmation, "no activity")
+        advanceUntilIdle()
+        distributor.onSessionStatus(confirmation.sessionId, SessionStatus.Failed(InstallProgress.Failed(InstallFailure.CANCELLED)))
+
+        assertEquals(InstallProgress.Failed(InstallFailure.OTHER, "no activity"), distributor.row(appA).progress)
+        assertEquals(listOf(confirmation.sessionId), sessions.abandoned)
+        assertNull(distributor.pendingConfirmation.value)
+
+        distributor.install(appA)
+        advanceUntilIdle()
+
+        assertEquals(InstallProgress.Installing, distributor.row(appA).progress)
+        assertEquals(2, downloads)
+    }
+
+    @Test
+    fun `a launch failure for another session changes nothing`() = runTest {
+        packages.installed[appA.packageName] = v1
+        val distributor = distributor()
+        val confirmation = pendingConfirmation(distributor, appA)
+
+        distributor.confirmationFailed(confirmation.copy(sessionId = confirmation.sessionId + 1), "no activity")
+        advanceUntilIdle()
+
+        assertEquals(InstallProgress.AwaitingConfirmation, distributor.row(appA).progress)
+        assertEquals(emptyList<Int>(), sessions.abandoned)
     }
 
     @Test

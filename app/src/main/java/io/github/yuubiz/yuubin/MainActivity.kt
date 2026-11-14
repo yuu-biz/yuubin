@@ -55,9 +55,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showConfirmation(confirmation: Confirmation) {
-        startSafely(confirmation.intent)
-        // Even when the dialog could not start: left unmarked, the same confirmation would be offered again and again.
-        viewModel.confirmationShown(confirmation)
+        when (val error = startSafely(confirmation.intent)) {
+            null -> viewModel.confirmationShown(confirmation)
+            else -> viewModel.confirmationFailed(confirmation, error.message ?: "install dialog did not open")
+        }
     }
 
     private fun onAction(packageName: String, action: RowAction) {
@@ -73,13 +74,15 @@ class MainActivity : ComponentActivity() {
     private fun packageIntent(action: String, packageName: String) =
         Intent(action, Uri.fromParts("package", packageName, null))
 
-    private fun startSafely(intent: Intent) {
+    /** Returns null once [intent] started, or the exception that stopped it. */
+    private fun startSafely(intent: Intent): Exception? =
         try {
             startActivity(intent)
+            null
         } catch (e: Exception) {
             Log.w(TAG, "Could not start ${intent.action}", e)
+            e
         }
-    }
 
     private companion object {
         const val TAG = "MainActivity"

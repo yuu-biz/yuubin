@@ -70,4 +70,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun reconcile() = distributor.reconcile()
 
     fun confirmationShown(confirmation: Confirmation) = distributor.confirmationShown(confirmation)
+
+    fun confirmationFailed(confirmation: Confirmation, detail: String?) = distributor.confirmationFailed(confirmation, detail)
 }
