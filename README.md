@@ -17,3 +17,7 @@ A release build reads its signing key from a git-ignored `keystore.properties` i
 ## Releases
 
 Releases are signed with the owner's key. Do not install a Yuubin APK signed by anyone else.
+
+## License
+
+[MIT](LICENSE)
