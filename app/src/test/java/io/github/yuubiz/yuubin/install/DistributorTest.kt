@@ -137,6 +137,22 @@ class DistributorTest {
     }
 
     @Test
+    fun `an update the system installs without asking succeeds with no confirmation`() = runTest {
+        packages.installed[appA.packageName] = v1
+        val distributor = distributor()
+        val id = committedInstall(distributor, appA)
+
+        packages.installed[appA.packageName] = v2
+        sessions.live.remove(id)
+        distributor.onSessionStatus(id, SessionStatus.Succeeded)
+        advanceUntilIdle()
+
+        assertEquals(AppRow(appA, AppStatus.UpToDate(v2, release), InstallProgress.Succeeded), distributor.row(appA))
+        assertNull(distributor.pendingConfirmation.value)
+        assertEquals(emptyList<Int>(), sessions.abandoned)
+    }
+
+    @Test
     fun `a session gone with a newer version installed settles as Succeeded`() = runTest {
         packages.installed[appA.packageName] = v1
         val distributor = distributor()

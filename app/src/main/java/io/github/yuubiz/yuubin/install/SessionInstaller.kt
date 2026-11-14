@@ -30,6 +30,9 @@ class SessionInstaller(private val context: Context) : InstallSessions {
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(packageName)
             setSize(size)
+            // Only a request: when its conditions are not met (first install, another installer, low targetSdk) the
+            // system answers STATUS_PENDING_USER_ACTION and the usual confirmation path runs.
+            if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
         }
         val id = installer.createSession(params)
         try {
