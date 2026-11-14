@@ -13,6 +13,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -20,13 +21,16 @@ import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.net.InetAddress
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import kotlin.random.Random
+import kotlin.time.Duration.Companion.milliseconds
 
 class ApkDownloaderTest {
     @get:Rule
     val temp = TemporaryFolder()
 
     private val server = MockWebServer()
+    private lateinit var client: OkHttpClient
     private lateinit var downloader: ApkDownloader
     private lateinit var target: File
     private val progress = mutableListOf<Long>()
@@ -41,9 +45,8 @@ class ApkDownloaderTest {
         val clientTls = HandshakeCertificates.Builder().addTrustedCertificate(certificate.certificate).build()
         server.useHttps(serverTls.sslSocketFactory())
         server.start(InetAddress.getByName(LOOPBACK), 0)
-        downloader = ApkDownloader(
-            OkHttpClient.Builder().sslSocketFactory(clientTls.sslSocketFactory(), clientTls.trustManager).build(),
-        )
+        client = OkHttpClient.Builder().sslSocketFactory(clientTls.sslSocketFactory(), clientTls.trustManager).build()
+        downloader = ApkDownloader(client)
         target = File(temp.root, "apk/app.apk")
     }
 
@@ -116,6 +119,16 @@ class ApkDownloaderTest {
     fun `a connection cut mid-body is a download failure`() {
         serve(apk) { onResponseBody(SocketEffect.ShutdownConnection) }
         assertFailed(InstallFailure.DOWNLOAD, download(asset()))
+    }
+
+    @Test
+    fun `a body still trickling at the call timeout is a download failure`() {
+        // About 30 s for the whole body, yet every read returns well within the default read timeout.
+        serve(apk) { throttleBody(1_000, 100, TimeUnit.MILLISECONDS) }
+        downloader = ApkDownloader(client, callTimeout = 500.milliseconds)
+
+        assertFailed(InstallFailure.DOWNLOAD, download(asset()))
+        assertTrue("some bytes arrived before the timeout", progress.isNotEmpty())
     }
 
     @Test

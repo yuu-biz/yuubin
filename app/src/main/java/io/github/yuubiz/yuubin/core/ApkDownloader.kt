@@ -11,6 +11,8 @@ import okhttp3.Request
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 
 sealed interface Download {
     data class Done(val file: File) : Download
@@ -18,9 +20,14 @@ sealed interface Download {
 }
 
 /** Streams a release asset to a file, hashing as it writes. On any failure the file is gone. */
-class ApkDownloader(client: OkHttpClient) {
-    // GitHub answers with a redirect to a signed URL; following it must never drop to cleartext.
-    private val client = client.newBuilder().followRedirects(true).followSslRedirects(false).build()
+class ApkDownloader(client: OkHttpClient, callTimeout: Duration = 10.minutes) {
+    // GitHub answers with a redirect to a signed URL; following it must never drop to cleartext. The call timeout
+    // bounds the whole download, which a trickling server would otherwise keep alive past every read timeout.
+    private val client = client.newBuilder()
+        .followRedirects(true)
+        .followSslRedirects(false)
+        .callTimeout(callTimeout)
+        .build()
 
     suspend fun download(asset: ApkAsset, target: File, onProgress: (bytes: Long) -> Unit): Download =
         withContext(Dispatchers.IO) {

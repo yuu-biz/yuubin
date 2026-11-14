@@ -11,12 +11,17 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /** Reads `releases/latest` of a catalog app's repository, unauthenticated. */
 class GitHubReleases(
-    private val client: OkHttpClient,
+    client: OkHttpClient,
     private val apiBase: HttpUrl = "https://api.github.com/".toHttpUrl(),
+    callTimeout: Duration = 30.seconds,
 ) {
+    private val client = client.newBuilder().callTimeout(callTimeout).build()
+
     suspend fun latest(app: CatalogApp): ReleaseLookup = withContext(Dispatchers.IO) {
         val url = apiBase.newBuilder()
             .addPathSegment("repos")

@@ -8,6 +8,8 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
+import java.util.concurrent.TimeUnit
+import kotlin.time.Duration.Companion.milliseconds
 
 class GitHubReleasesTest {
     private val server = MockWebServer()
@@ -61,6 +63,17 @@ class GitHubReleasesTest {
         )
         assertEquals("https://github.com/yuu-biz/Folder-Player/releases/tag/v1.10.2", release.pageUrl)
         assertEquals("## Changes\n\n- Synthetic release notes for tests.", release.notes)
+    }
+
+    @Test
+    fun `a response still trickling at the call timeout is a network failure`() {
+        releases = GitHubReleases(OkHttpClient(), server.url("/"), callTimeout = 500.milliseconds)
+        // About 19 s for the whole body, yet every read returns well within the default read timeout.
+        server.enqueue(
+            MockResponse.Builder().body(fixture("folder-player-v1.10.2.json")).throttleBody(16, 100, TimeUnit.MILLISECONDS).build(),
+        )
+
+        assertEquals(LookupFailure.NETWORK, failure())
     }
 
     @Test
