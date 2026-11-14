@@ -83,15 +83,21 @@ class Distributor(
         apkDir.deleteRecursively()
     }
 
-    /** Looks up every release concurrently and re-reads the installed state. */
-    suspend fun refresh() = coroutineScope {
-        catalog.forEach { app ->
-            launch { syncInstalled(app) }
-            launch {
-                val lookup = latestRelease(app)
-                modify(app) { copy(lookup = lookup) }
+    /**
+     * Looks up every release concurrently, re-reads the installed state and returns the rows as they then are.
+     * [rows] is updated on [scope] and may not show the result yet when this returns.
+     */
+    suspend fun refresh(): List<AppRow> {
+        coroutineScope {
+            catalog.forEach { app ->
+                launch { syncInstalled(app) }
+                launch {
+                    val lookup = latestRelease(app)
+                    modify(app) { copy(lookup = lookup) }
+                }
             }
         }
+        return toRows(slots.value)
     }
 
     /** Starts download, verification and the install session. Ignored while [app] already has one in flight. */

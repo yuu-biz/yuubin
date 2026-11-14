@@ -1,6 +1,7 @@
 package io.github.yuubiz.yuubin
 
 import android.app.Application
+import io.github.yuubiz.yuubin.updates.UpdateCheckWorker
 
 class YuubinApp : Application() {
     lateinit var container: AppContainer
@@ -9,5 +10,6 @@ class YuubinApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        UpdateCheckWorker.schedule(this)
     }
 }

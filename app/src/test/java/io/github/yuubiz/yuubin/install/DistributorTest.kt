@@ -91,6 +91,21 @@ class DistributorTest {
     }
 
     @Test
+    fun `refresh returns the rows it produced`() = runTest {
+        packages.installed[appA.packageName] = v1
+
+        val rows = distributor().refresh()
+
+        assertEquals(
+            listOf(
+                AppRow(appA, AppStatus.UpdateAvailable(v1, release), InstallProgress.Idle),
+                AppRow(appB, AppStatus.NotInstalled(release), InstallProgress.Idle),
+            ),
+            rows,
+        )
+    }
+
+    @Test
     fun `startup abandons only sessions known to be uncommitted`() = runTest {
         sessions.live[1] = FakeSessions.Live(appA.packageName, committed = false)
         sessions.live[2] = FakeSessions.Live(appB.packageName, committed = true)

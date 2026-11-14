@@ -48,4 +48,9 @@
     <string name="failure_storage">ストレージの空き容量が足りません。</string>
     <string name="failure_blocked">システムまたは端末のポリシーによりインストールがブロックされました。</string>
     <string name="failure_other">原因不明のエラーでインストールに失敗しました。</string>
+
+    <string name="update_channel_name">アプリの更新</string>
+    <plurals name="update_notification_title">
+        <item quantity="other">更新があります</item>
+    </plurals>
 </resources>

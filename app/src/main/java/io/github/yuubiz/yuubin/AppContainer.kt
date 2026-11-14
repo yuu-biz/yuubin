@@ -7,6 +7,7 @@ import io.github.yuubiz.yuubin.core.GitHubReleases
 import io.github.yuubiz.yuubin.install.Distributor
 import io.github.yuubiz.yuubin.install.Packages
 import io.github.yuubiz.yuubin.install.SessionInstaller
+import io.github.yuubiz.yuubin.updates.UpdateNotifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -26,4 +27,6 @@ class AppContainer(context: Context) {
         apkDir = File(context.cacheDir, "apk"),
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     )
+
+    val updateNotifier = UpdateNotifier(context)
 }

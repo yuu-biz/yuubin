@@ -48,4 +48,10 @@
     <string name="failure_storage">There is not enough storage space to install this app.</string>
     <string name="failure_blocked">The installation was blocked by the system or a device policy.</string>
     <string name="failure_other">The installation failed for an unknown reason.</string>
+
+    <string name="update_channel_name">App updates</string>
+    <plurals name="update_notification_title">
+        <item quantity="one">Update available</item>
+        <item quantity="other">Updates available</item>
+    </plurals>
 </resources>
